@@ -1,3 +1,10 @@
+## Multi-object GOTURN 
+
+This is a small adaptation of the GOTURN object tracking algorithm implemented in pytorch. 99% of the work has been done by the original author and the original `README` is shown below. The only improvements are:
+
+* GPU support (CUDA) for pytorch that gives around 2x speedup
+* Multiple object tracking support
+<hr>
 <!-- PROJECT LOGO -->
 <p align="center">
   <h3 align="center">GOTURN-PyTorch</h3>
