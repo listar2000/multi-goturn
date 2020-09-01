@@ -1,0 +1,1 @@
+python demo_folder.py --model_dir E:\goturn-models\caffenet\lightning_logs\version_0\ --input ..\test\8

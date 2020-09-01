@@ -9,7 +9,6 @@ Source: https://github.com/jiecaoyu/pytorch_imagenet/blob/master/networks/model_
 import torch
 import torch.nn as nn
 
-
 class AlexNetNN(nn.Module):
 
     """Docstring for AlexNet. """

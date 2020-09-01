@@ -22,6 +22,8 @@ except ImportError:
     logger.error('Please run $source settings.sh from root directory')
     sys.exit(1)
 
+# uncomment this to add GPU support
+# torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
 class GoturnNetwork(nn.Module):
 

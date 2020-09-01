@@ -8,6 +8,7 @@ Description: tracking from folder
 
 import argparse
 import sys
+import re
 from pathlib import Path
 
 import cv2
@@ -28,36 +29,42 @@ except ImportError:
     logger.error('Please run $source settings.sh from root directory')
     sys.exit(1)
 
-
-refPt = []
+bb_colors = [(0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255)]
+refPts = []
 image = []
 cv2.namedWindow('image')
-
+gpu_device = torch.device("cuda:0")
 
 def click_and_crop(event, x, y, flags, param):
-    # grab references to the global variables
-    global refPt, cropping
-    # if the left mouse button was clicked, record the starting
-    # (x, y) coordinates and indicate that cropping is being
-    # performed
+    # updated by Star Li to add multiple bbs support
     if event == cv2.EVENT_LBUTTONDOWN:
-        refPt = [(x, y)]
-        cropping = True
+        refPts.append([(x, y)])
+
+    elif event == cv2.EVENT_RBUTTONDOWN:
+        if len(refPts) > 0:
+            del refPts[-1]
+    
+    elif event == cv2.EVENT_RBUTTONUP:
+        global image
+        img_dbg = np.copy(image)
+        for index, refPt in enumerate(refPts):
+            img_dbg = cv2.rectangle(img_dbg, refPt[0], refPt[1], bb_colors[index], 2)
+        cv2.imshow("image", img_dbg)
 
     # check to see if the left mouse button was released
     elif event == cv2.EVENT_LBUTTONUP:
         # record the ending (x, y) coordinates and indicate that
         # the cropping operation is finished
-        refPt.append((x, y))
-        cropping = False
+        refPts[-1].append((x, y))
         # draw a rectangle around the region of interest
-        global image
         img_dbg = np.copy(image)
-        img_dbg = cv2.rectangle(img_dbg, refPt[0], refPt[1], (0, 255, 0), 2)
-        # img_dbg = cv2.cvtColor(img_dbg, cv2.COLOR_RGB2BGR)
+        for index, refPt in enumerate(refPts):
+            img_dbg = cv2.rectangle(img_dbg, refPt[0], refPt[1], bb_colors[index], 2)
         cv2.imshow("image", img_dbg)
         cv2.waitKey(0)
-
+    
+    elif event == cv2.EVENT_MBUTTONDOWN:
+        sys.exit(0)
 
 cv2.setMouseCallback("image", click_and_crop)
 
@@ -81,9 +88,10 @@ class loadfromfolder:
         if len(vid_frames) == 0:
             vid_frames = [str(img_path) for img_path in
                           Path(vid_dir).glob('*.png')]
-        list_of_frames = sorted(vid_frames)
+        
+        vid_frames.sort(key=lambda f: int(re.sub(r'\D', '', f)))
 
-        self._vid_frames = [list_of_frames]
+        self._vid_frames = [vid_frames]
 
         return self._vid_frames
 
@@ -103,6 +111,8 @@ class GoturnTracker:
         ckpt_path = next(ckpt_dir.glob('*.ckpt'))
 
         model = GoturnTrain.load_from_checkpoint(ckpt_path)
+        model = model.to(torch.device(gpu_device))
+
         model.eval()
         model.freeze()
 
@@ -162,6 +172,11 @@ class GoturnTracker:
         target_pad_in = self.preprocess(target_pad, mean=None).unsqueeze(0)
         cur_search_region_in = self.preprocess(cur_search_region,
                                                mean=None).unsqueeze(0)
+
+        # GPU support
+        target_pad_in = target_pad_in.to(gpu_device)
+        cur_search_region_in = cur_search_region_in.to(gpu_device)
+
         pred_bb = self._model.forward(target_pad_in,
                                       cur_search_region_in)
         if self._dbg:
@@ -197,6 +212,7 @@ class GoturnTracker:
 
     def track(self):
         """Track"""
+        print("start tracking")
         vid_frames = self._vid_frames[0]
         num_frames = len(vid_frames)
         f_path = vid_frames[0]
@@ -205,43 +221,47 @@ class GoturnTracker:
         prev = np.asarray(frame_0)
         global image
         image = prev
+
+        refPt = None
         while True:
             # prev_out = cv2.cvtColor(prev, cv2.COLOR_RGB2BGR)
             prev_out = np.copy(prev)
             cv2.imshow('image', prev_out)
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('s'):
-                (x1, y1), (x2, y2) = refPt[0], refPt[1]
-                bbox_0 = BoundingBox(x1, y1, x2, y2)
+            key = cv2.waitKey(100) & 0xFF
+            if key == ord('s') or key == ord('r'):
+                bboxes_0 = []
+                for refPt in refPts:
+                    (x1, y1), (x2, y2) = refPt[0], refPt[1]
+                    bboxes_0.append(BoundingBox(x1, y1, x2, y2))
                 break
-            elif key == ord('r'):
-                (x1, y1), (x2, y2) = refPt[0], refPt[1]
-                bbox_0 = BoundingBox(x1, y1, x2, y2)
-                break
-
+        
         for i in range(1, num_frames):
+            print("frame: ", i)
             f_path = vid_frames[i]
             frame_1 = image_io.load(f_path)
             curr = np.asarray(frame_1)
-            bbox_0 = self._track(curr, prev, bbox_0)
-            bbox = bbox_0
-            prev = curr
-
-            if cv2.waitKey(1) & 0xFF == ord('p'):
-                while True:
-                    image = curr
-                    cv2.imshow("image", curr)
-                    key = cv2.waitKey(0) & 0xFF
-                    if key == ord("s"):
-                        (x1, y1), (x2, y2) = refPt[0], refPt[1]
-                        bbox_0 = BoundingBox(x1, y1, x2, y2)
-                        break
-
             curr_dbg = np.copy(curr)
-            curr_dbg = cv2.rectangle(curr_dbg, (int(bbox.x1),
-                                                int(bbox.y1)),
-                                     (int(bbox.x2), int(bbox.y2)), (255, 255, 0), 2)
 
+            for index, bbox_0 in enumerate(bboxes_0):
+                bboxes_0[index] = self._track(curr, prev, bbox_0)
+                bbox = bboxes_0[index]
+
+                # Star's note: useless code so far... 
+                # if cv2.waitKey(1) & 0xFF == ord('p'):
+                #     while True:
+                #         image = curr
+                #         cv2.imshow("image", curr)
+                #         key = cv2.waitKey(0) & 0xFF
+                #         if key == ord("s"):
+                #             (x1, y1), (x2, y2) = refPt[0], refPt[1]
+                #             bbox_0 = BoundingBox(x1, y1, x2, y2)
+                #             break
+
+                curr_dbg = cv2.rectangle(curr_dbg, (int(bbox.x1),
+                                                    int(bbox.y1)),
+                                        (int(bbox.x2), int(bbox.y2)), bb_colors[index], 2)
+
+            prev = curr
             # curr_dbg = cv2.cvtColor(curr_dbg, cv2.COLOR_RGB2BGR)
             cv2.imshow('image', curr_dbg)
             # cv2.imwrite('./output/{:04d}.png'.format(i), curr_dbg)
